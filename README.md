@@ -21,9 +21,9 @@ Should state "Ready on localhost:3000" if all is well!
 
 # Participants and Authors of the project 
 
-Fernando ESTALELLA
-Javier ORTUÑO
-Richard ROJAS
+Fernando ESTALELLA,
+Javier ORTUÑO,
+Richard ROJAS,
 Noel WILAMOWSKI
 
 
