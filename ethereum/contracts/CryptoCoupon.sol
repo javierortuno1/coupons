@@ -1,4 +1,4 @@
-    pragma solidity ^0.4.18;
+   pragma solidity ^0.4.18;
     
     import "./AccessControl.sol";
     import "./ERC721.sol";
@@ -43,11 +43,16 @@
         mapping (uint256 => uint256) private tokenIdToPrice;
         mapping (address => uint256) private ownershipTokenCount;
         mapping (uint256 => address) private tokenIdToApproved;
-        //players to participate in the lottery
-        address[] public players;
+        //lottery
+        address[] private players;
+        address[] private helper;
+        address private playerWinner;
+        
         constructor(string _name, address _creator) public {
             owner = _creator;
             name = _name;
+            ceoAddress = owner;
+            cooAddress = ceoAddress;
         }
        
         struct Coupon {
@@ -55,48 +60,49 @@
             string description;
             uint256 serialNumber;
             bool gift;
-            uint fee;
             uint8 value;
         }
     
-        Coupon[] public coupons;
-        Coupon[] public couponsRaffle;
-        Coupon[] public couponsSale;
+        Coupon[] private coupons;
+        uint256[] private couponsRaffle;
+        uint256[] private couponsSaleCLevel;
+        uint256[] private couponsSaleUser;
         uint cont = 0;
-    
-        function createToken(string _name, string _description, uint256 _serialNumber, bool _gift, uint _fee, uint8 _value,
+        
+        
+        function createToken(string _name, string _description, bool _gift, uint8 _value,
         address _owner, uint256 _price) public onlyCLevel {
             require(_owner != address(0));
     
-            _createToken(_name, _description, _serialNumber, _gift, _fee, _value,
+            _createToken(_name, _description, cont, _gift, _value,
                     _owner, _price);
             
         }
         //ASSIGNED DEFAULT TOKEN TO cooAddress
         function createToken(string _name, string _description, bool _gift, uint8 _value) public onlyCEO {
-            
-            _createToken(_name, _description, 0, _gift, 0, _value,
+            cont++;
+            _createToken(_name, _description, cont, _gift, _value,
                   cooAddress, 0.01 ether);
         }
         //Se debe evaluar el gas consumido en lotes . If the remix crash, rise the gasLimit
          function createTokensBatch(string _name, string _description, bool _gift, uint8 _value, uint _numberOfTokens) public {
             for (uint i = 0; i < _numberOfTokens ; i++){
-                _createToken(_name, _description, 0, _gift, 0, _value,
+                cont++;
+                _createToken(_name, _description, cont, _gift, _value,
                   cooAddress, 0.01 ether);
             }
             
         }
        
-        function _createToken(string _name, string _description, uint256 _serialNumber, bool _gift, uint _fee,
+        function _createToken(string _name, string _description, uint256 _serialNumber, bool _gift,
                 uint8 _value, address _owner, uint256 _price) private {
-                    _owner = owner;
-                    cont++;
+                    owner = _owner;
+                    
             Coupon memory _Coupon = Coupon({
                 name: _name,
                 description: _description,
-                serialNumber: cont,
+                serialNumber: _serialNumber,
                 gift: _gift,
-                fee:  _fee,
                 value: _value
             });
             
@@ -174,10 +180,12 @@
         }
     
         function purchase(uint256 _tokenId) public payable whenNotPaused {
+            require(!coupons[_tokenId].gift);
             address oldOwner = ownerOf(_tokenId);
             address newOwner = msg.sender;
             uint256 sellingPrice = priceOf(_tokenId);
-    
+            require(checkTokenIdExistsCLevel(_tokenId) || checkTokenIdExistsUser(_tokenId));
+              
             require(oldOwner != address(0));
             require(newOwner != address(0));
             require(oldOwner != newOwner);
@@ -186,7 +194,6 @@
             require(msg.value >= sellingPrice);
     
             _transfer(oldOwner, newOwner, _tokenId);
-            //tokenIdToPrice[_tokenId] = nextPriceOf(_tokenId);
             emit TokenSold(
                 _tokenId,
                 coupons[_tokenId].name,
@@ -205,9 +212,30 @@
             if (excess > 0) {
                 newOwner.transfer(excess);
             }
+            uint256 i; 
+            
+            if(checkTokenIdExistsCLevel(_tokenId)){
+               for(i = 0; i < couponsSaleCLevel.length; i++){
+                if(couponsSaleCLevel[i] ==_tokenId){
+                    
+                    couponsSaleCLevel[i] = couponsSaleCLevel[couponsSaleCLevel.length - 1];
+                    delete couponsSaleCLevel[couponsSaleCLevel.length - 1];
+                    couponsSaleCLevel.length--;
+    
+                }
+               }
+            }
+            
+            
+            
+            if(checkTokenIdExistsUser(_tokenId)){
+                deleteCouponFromSaleUser(_tokenId);
+            }
+            
+        
         }
     
-        function priceOf(uint256 _tokenId) public view returns (uint256 _price) {
+        function priceOf (uint256 _tokenId) public view returns (uint256 _price) {
             return tokenIdToPrice[_tokenId];
         }    
         
@@ -247,6 +275,12 @@
             tokenIdToApproved[_tokenId] = _to;
             emit Approval(msg.sender, _to, _tokenId);
         }
+        
+        function cancelApproval(address _to,uint256 _tokenId ) public whenNotPaused {
+            require(_owns(msg.sender, _tokenId));
+            tokenIdToApproved[_tokenId] = address(0);
+            emit Approval(msg.sender, _to, _tokenId);
+        }
     
         function transferFrom(address _from, address _to, uint256 _tokenId) public whenNotPaused {
             require(_to != address(0));
@@ -263,17 +297,18 @@
             _transfer(msg.sender, _to, _tokenId);
         }
     
+        // Not usefull.
         function takeOwnership(uint256 _tokenId) public whenNotPaused {
             require(_approved(msg.sender, _tokenId));
             _transfer(tokenIdToOwner[_tokenId], msg.sender, _tokenId);
         }
     
         function name() public view returns (string _name) {
-            _name = "Addidas";
+            _name = name;
         }
     
         function symbol() public view returns (string _symbol) {
-            _symbol = "ADD";
+            _symbol = name;
         }
     
         function _owns(address _claimant, uint256 _tokenId) private view returns (bool) {
@@ -317,13 +352,29 @@
             str = string(s);
         }
         
-      function _burn(address _owner, uint256 _tokenId) internal {
+      function burn(address _owner, uint256 _tokenId) public onlyCLevel {
         clearApproval(_owner, _tokenId);
         removeTokenFrom(_owner, _tokenId);
         emit Transfer(_owner, address(0), _tokenId);
       }
     
-    
+      function redeemCoupon(uint256 _tokenId) public {
+          require(ownerOf(_tokenId)== msg.sender);
+          transfer(ceoAddress, _tokenId);
+      }  
+      
+      function reUseCoupon(uint256 _tokenId, string _name, string _description,
+      bool _gift, uint8 _value, address _owner, uint256 _price) public onlyCLevel{
+          require(ownerOf(_tokenId)== msg.sender);
+          
+          coupons[_tokenId].name = _name;
+          coupons[_tokenId].description = _description;
+          coupons[_tokenId].gift = _gift;
+          coupons[_tokenId].value = _value;
+          tokenIdToPrice[_tokenId] = _price;
+          tokenIdToOwner[_tokenId] = _owner;
+      }
+      
       function clearApproval(address _owner, uint256 _tokenId) internal {
         require(ownerOf(_tokenId) == _owner);
         if (tokenIdToApproved[_tokenId] != address(0)) {
@@ -350,6 +401,14 @@
             players.push(msg.sender);
         }
         
+       function getLotteryPlayers()public view returns(address[]){
+           return players;
+       }
+       
+       function numberPlayers() public view returns(uint256){
+           return players.length;
+       }
+        
         //to check player
         function checkPlayerExists(address player) public constant returns(bool){
           for(uint256 i = 0; i < players.length; i++){
@@ -357,6 +416,19 @@
           }
           return false;
        }
+       
+       //to check TokenId exists for Raffle
+        function checkTokenIdExistRaffle(uint256 _tokenId) private view returns(bool){
+          for(uint256 i = 0; i < couponsRaffle.length; i++){
+             if(couponsRaffle[i] ==_tokenId) return true;
+          }
+          return false;
+        }
+        
+        function getTokenToRaffle() public view returns (uint256[]){
+            return couponsRaffle;
+        }
+       
        //generate winner of token.
         function _winnerAddress() private view onlyCLevel returns(address) {
           //it depends of the condition
@@ -364,12 +436,33 @@
           uint256 numberGenerated = block.number % players.length + 1; // This isn't secure
           return players[numberGenerated];
        }
-      // !!! if the _tokenId is already owned not by the CEO/COO could be a big problem 
-       function generateWinnerOfToken(uint256 _tokenId) public onlyCLevel returns (address) {
-            require(tokenIdToOwner[_tokenId] == ceoAddress || tokenIdToOwner[_tokenId] == ceoAddress);
-            address playerWinner = _winnerAddress();
-            transfer(playerWinner, _tokenId);
-            return playerWinner;
+       
+       
+       
+        function generateWinnerOfToken(uint256 _tokenId) public onlyCLevel {
+         require(checkTokenIdExistRaffle(_tokenId));
+                playerWinner = _winnerAddress();
+                transfer(playerWinner, _tokenId);
+                // Should we clean the array
+                players = helper;
+                // delete tokenID from Raffle
+                for(uint256 i = 0; i < couponsRaffle.length; i++){
+                    if(couponsRaffle[i] ==_tokenId){
+                        couponsRaffle[i] = couponsRaffle[couponsRaffle.length - 1];
+                        delete couponsRaffle[couponsRaffle.length - 1];
+                        couponsRaffle.length--;
+                    }
+    
+                }
+            
+       }
+       
+       function clearPlayerList() public onlyCLevel{
+           players = helper;
+       }
+       
+       function getLastWinner() public view returns(address){
+           return playerWinner;
        }
        
        function getSummary() public view returns (
@@ -383,55 +476,131 @@
             );
         }
     
-        function getCouponsCount() public view returns (uint) {
-            return coupons.length;
-        }
-        
         function getCouponsSaleCount() public view returns (uint) {
-            return couponsSale.length;
+            return couponsSaleCLevel.length;
         }
         
         function getCouponsRaffleCount() public view returns (uint) {
             return couponsRaffle.length;
         }
         
-        function setCouponToSale(uint256 _serialNumber) public onlyCLevel {
-           
-            for(uint256 i = 0; i < couponsSale.length; i++){
-                if(couponsSale[i].serialNumber==_serialNumber)
+         //Set Coupon for SALE onlyClevel
+        function setCouponToSaleCLevel(uint256 _tokenId, uint256 _newPrice) public onlyCLevel {
+            require(!coupons[_tokenId].gift);
+            require(!checkTokenIdExistRaffle(_tokenId));
+            require(ownerOf(_tokenId) == msg.sender);
+            for(uint256 i = 0; i < couponsSaleCLevel.length; i++){
+                if(couponsSaleCLevel[i] ==_tokenId)
                     return;
             }
-             couponsSale.push(coupons[_serialNumber]);
+             couponsSaleCLevel.push(_tokenId);
+             
+             if(_newPrice > 0){
+                 tokenIdToPrice[_tokenId] = _newPrice;
+             }
        
         }
         
-         function deleteCouponFromSale(uint256 _serialNumber) public onlyCLevel {
-           
-            for(uint256 i = 0; i < couponsSale.length; i++){
-                if(couponsSale[i].serialNumber==_serialNumber)
-                    delete couponsSale[i];
+         //Delete Coupon for SALE onlyClevel
+         function deleteCouponFromSaleCLevel(uint256 _tokenId) public onlyCLevel {
+           require(ownerOf(_tokenId)== msg.sender);
+           require(!checkTokenIdExistsCLevel(_tokenId));
+            for(uint256 i = 0; i < couponsSaleCLevel.length; i++){
+                if(couponsSaleCLevel[i] ==_tokenId){
+                    
+                    couponsSaleCLevel[i] = couponsSaleCLevel[couponsSaleCLevel.length - 1];
+                    delete couponsSaleCLevel[couponsSaleCLevel.length - 1];
+                    couponsSaleCLevel.length--;
+    
+                }
             }
              
         }
-         function setCouponToRaffle(uint256 _serialNumber) public onlyCLevel {
-           
-            for(uint256 i = 0; i < couponsRaffle.length; i++){
-                if(couponsRaffle[i].serialNumber==_serialNumber)
+        
+         function getTokenToSellClevel() public view returns(uint256[]){
+            return couponsSaleCLevel;
+        }
+        
+        
+        //Set Coupon for SALE User
+        function setCouponToSaleUser(uint256 _tokenId, uint256 _newPrice) public  {
+            require(ownerOf(_tokenId) == msg.sender);
+            require(!coupons[_tokenId].gift);
+            for(uint256 i = 0; i < couponsSaleUser.length; i++){
+                if(couponsSaleUser[i] ==_tokenId){
                     return;
+                }
             }
-             couponsRaffle.push(coupons[_serialNumber]);
+             couponsSaleUser.push(_tokenId);
+             
+             if(_newPrice > 0){
+                 tokenIdToPrice[_tokenId] = _newPrice;
+             }
        
         }
         
-        function deleteCouponFromRaffle(uint256 _serialNumber) public onlyCLevel {
-           
-            for(uint256 i = 0; i < couponsRaffle.length; i++){
-                if(couponsRaffle[i].serialNumber==_serialNumber)
-                    delete couponsRaffle[i];
+        function deleteCouponFromSaleUser(uint256 _tokenId) public  {
+            require(ownerOf(_tokenId) == msg.sender);
+            require(!checkTokenIdExistsUser(_tokenId));
+            for(uint256 i = 0; i < couponsSaleUser.length; i++){
+                if(couponsSaleUser[i]==_tokenId){
+ 
+                    couponsSaleUser[i] = couponsSaleUser[couponsSaleUser.length - 1];
+                    delete couponsSaleUser[couponsSaleUser.length - 1];
+                    couponsSaleUser.length--;
+                }
             }
-            
+             
+        }
+        
+        
+        
+        function getTokenToSellUser() public view returns(uint256[]){
+            return couponsSaleUser;
+        }
+        
+        
+        //to check TokenId exists for SALE onlyClevel
+        function checkTokenIdExistsCLevel(uint256 _tokenId) public constant returns(bool){
+          for(uint256 i = 0; i < couponsSaleCLevel.length; i++){
+             if(couponsSaleCLevel[i] ==_tokenId) return true;
+          }
+          return false;
+        }
+        
+        //to check TokenId exists for SALE User
+        function checkTokenIdExistsUser(uint256 _tokenId) public constant returns(bool){
+          for(uint256 i = 0; i < couponsSaleUser.length; i++){
+             if(couponsSaleUser[i] == _tokenId) return true;
+          }
+          return false;
+        }
+        
+         function setCouponToRaffle(uint256 _tokenId) public onlyCLevel {
+            require(!checkTokenIdExistsCLevel(_tokenId));
+            require(ownerOf(_tokenId) == msg.sender);
+            for(uint256 i = 0; i < couponsRaffle.length; i++){
+                if(couponsRaffle[i]==_tokenId)
+                    return;
+            }
+             couponsRaffle.push(_tokenId);
        
         }
+        
+        function deleteCouponFromRaffle(uint256 _tokenId) public onlyCLevel{
+           require(ownerOf(_tokenId) == msg.sender);
+            for(uint256 i = 0; i < couponsRaffle.length; i++){
+                if(couponsRaffle[i] ==_tokenId){
+                    couponsRaffle[i] = couponsRaffle[couponsRaffle.length - 1];
+                    delete couponsRaffle[couponsRaffle.length - 1];
+                    couponsRaffle.length--;
+
+                }
+            }
+        
+       
+        }
+        
        
     
     }
